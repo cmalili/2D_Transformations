@@ -24,6 +24,7 @@ quad_points = np.array([
 
 # Draw the quadrilateral (filled with white)
 cv2.fillPoly(img, [quad_points], 255)
+cv2.imwrite("white_rec.jpg", img)
 
 # Display the original image
 plt.figure(figsize=(12, 4))
