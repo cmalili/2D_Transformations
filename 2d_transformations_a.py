@@ -47,7 +47,7 @@ plt.title('Translated by (30, 100)')
 plt.axis('on')
 
 # 2. Rotate the translated image by 45 degrees around the center
-center = (150, 150)  # Center of the image
+center = (0, 0)  # Center of the image
 rotation_matrix = cv2.getRotationMatrix2D(center, 45, 1.0)
 rotated_img = cv2.warpAffine(translated_img, rotation_matrix, (300, 300))
 
