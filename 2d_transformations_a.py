@@ -51,6 +51,8 @@ center = (150, 150)  # Center of the image
 rotation_matrix = cv2.getRotationMatrix2D(center, 45, 1.0)
 rotated_img = cv2.warpAffine(translated_img, rotation_matrix, (300, 300))
 
+cv2.imwrite("new_white_rec.jpg", rotated_img)
+
 # Display the rotated image
 plt.subplot(133)
 plt.imshow(rotated_img, cmap='gray')
