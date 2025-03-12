@@ -10,364 +10,357 @@ import numpy as np
 import cv2
 import matplotlib.pyplot as plt
 
-def compute_harris_keypoints(image, threshold=0.01, neighborhood_size=3):
-    """
-    Detect Harris corners and return keypoints.
-    
-    Args:
-        image: Grayscale input image
-        threshold: Harris corner response threshold
-        neighborhood_size: Size of the local non-maximum suppression window
-        
-    Returns:
-        List of keypoint coordinates (y, x)
-    """
-    # Compute Harris corner response
-    harris_response = cv2.cornerHarris(image.astype(np.float32), 
-                                       blockSize=2, 
-                                       ksize=3, 
-                                       k=0.04)
-    
-    # Normalize the response
-    harris_response = cv2.normalize(harris_response, None, 0, 1, cv2.NORM_MINMAX)
-    
-    # Apply threshold and non-maximum suppression
-    keypoints = []
-    for y in range(neighborhood_size, harris_response.shape[0] - neighborhood_size):
-        for x in range(neighborhood_size, harris_response.shape[1] - neighborhood_size):
-            if harris_response[y, x] > threshold:
-                # Check if it's a local maximum
-                window = harris_response[y-neighborhood_size:y+neighborhood_size+1, 
-                                         x-neighborhood_size:x+neighborhood_size+1]
-                if harris_response[y, x] == np.max(window):
-                    keypoints.append((y, x))
-    
-    return keypoints
 
-def compute_rotation_invariant_descriptor(image, keypoint, num_bins=36, radius_bins=4, max_radius=12):
+def harris_keypoint_descriptor(image, keypoints, patch_size=7, num_bins=8, sigma=1):
     """
-    Compute a rotation-invariant descriptor for a Harris corner keypoint.
-    Uses a histogram of gradients in polar coordinates.
+    Generate descriptors for Harris keypoints based on histogram of oriented gradients.
     
-    Args:
-        image: Grayscale input image
-        keypoint: (y, x) coordinates of the keypoint
-        num_bins: Number of orientation bins (angular resolution)
-        radius_bins: Number of radial bins
-        max_radius: Maximum radius to consider around the keypoint
+    Parameters:
+    -----------
+    image : ndarray
+        Input grayscale image
+    keypoints : ndarray
+        Binary mask where True values indicate keypoint locations
+    patch_size : int
+        Size of the patch around each keypoint (must be odd)
+    num_bins : int
+        Number of orientation bins for the histogram
+    sigma : float
+        Standard deviation for Gaussian weighting
         
     Returns:
-        Descriptor vector (normalized histogram)
+    --------
+    descriptors : ndarray
+        Array of descriptors for each keypoint
+    keypoint_coords : ndarray
+        Coordinates of keypoints that have valid descriptors
     """
-    y, x = keypoint
-    height, width = image.shape
+    # Ensure patch_size is odd
+    if patch_size % 2 == 0:
+        patch_size += 1
     
-    # Calculate image gradients
-    gx = cv2.Sobel(image, cv2.CV_64F, 1, 0, ksize=3)
-    gy = cv2.Sobel(image, cv2.CV_64F, 0, 1, ksize=3)
+    # Make sure image is grayscale
+    if len(image.shape) > 2:
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = image.copy()
     
-    # Calculate gradient magnitude and orientation
-    magnitude = np.sqrt(gx**2 + gy**2)
-    orientation = np.arctan2(gy, gx) * 180 / np.pi  # Convert to degrees
+    gray = gray.astype(np.float32)
+    dx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+    dy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
     
-    # Initialize the descriptor histogram
-    histogram = np.zeros((radius_bins, num_bins))
+    magnitude = np.sqrt(dx**2 + dy**2)
+    orientation = np.arctan2(dy, dx) * 180 / np.pi  # Convert to degrees
     
-    # Compute bin size for radius
-    radius_bin_size = max_radius / radius_bins
+    orientation = np.mod(orientation, 360)
     
-    # Define a dominant orientation for rotation normalization
-    dominant_orientation = 0
-    orientation_votes = np.zeros(num_bins)
+    keypoint_coords = np.argwhere(keypoints)
     
-    # Collect votes for dominant orientation from the local region
-    for i in range(-max_radius, max_radius + 1):
-        for j in range(-max_radius, max_radius + 1):
-            yi, xi = y + i, x + j
-            
-            # Check if the pixel is within image boundaries
-            if 0 <= yi < height and 0 <= xi < width:
-                pixel_radius = np.sqrt(i**2 + j**2)
+    half_patch = patch_size // 2
+    
+    descriptors = []
+    valid_keypoints = []
+    
+    y, x = np.mgrid[-half_patch:half_patch+1, -half_patch:half_patch+1]
+    gaussian_weights = np.exp(-(x**2 + y**2) / (2 * sigma**2))
+    
+    # Process each keypoint
+    for y, x in keypoint_coords:
+        # Skip keypoints too close to the image boundary
+        if (y < half_patch or y >= gray.shape[0] - half_patch or 
+            x < half_patch or x >= gray.shape[1] - half_patch):
+            continue
+        
+        # Extract patch around the keypoint
+        y_start, y_end = y - half_patch, y + half_patch + 1
+        x_start, x_end = x - half_patch, x + half_patch + 1
+        
+        patch_magnitude = magnitude[y_start:y_end, x_start:x_end]
+        patch_orientation = orientation[y_start:y_end, x_start:x_end]
+        
+        # Weight magnitudes by Gaussian
+        weighted_magnitude = patch_magnitude * gaussian_weights
+        
+        # Compute the histogram of oriented gradients
+        hist_range = (0, 360)
+        hist = np.zeros(num_bins)
+        
+        # Divide 360 degrees into num_bins
+        bin_width = 360 / num_bins
+        
+        # Fill the histogram
+        for i in range(patch_size):
+            for j in range(patch_size):
+                ori = patch_orientation[i, j]
+                mag = weighted_magnitude[i, j]
                 
-                if pixel_radius <= max_radius:
-                    # Calculate the orientation bin
-                    ori = orientation[yi, xi]
-                    # Ensure orientation is between 0 and 360
-                    if ori < 0:
-                        ori += 360
-                    ori_bin = int(ori * num_bins / 360) % num_bins
-                    
-                    # Weight by magnitude
-                    orientation_votes[ori_bin] += magnitude[yi, xi]
+                # Calculate bin index and contribution
+                bin_idx = int(ori / bin_width) % num_bins
+                hist[bin_idx] += mag
+        
+        # Normalize the histogram
+        norm = np.linalg.norm(hist)
+        if norm > 0:
+            hist = hist / norm
+        
+        # Add to descriptors
+        descriptors.append(hist)
+        valid_keypoints.append([y, x])
     
-    # Find the dominant orientation (smoothed)
-    smoothed_votes = np.copy(orientation_votes)
-    for i in range(num_bins):
-        # Circular smoothing with neighbors
-        prev_idx = (i - 1) % num_bins
-        next_idx = (i + 1) % num_bins
-        smoothed_votes[i] = 0.25 * orientation_votes[prev_idx] + \
-                             0.5 * orientation_votes[i] + \
-                             0.25 * orientation_votes[next_idx]
+    return np.array(descriptors), np.array(valid_keypoints)
+
+
+def orientation_normalized_hkd(image, keypoints, patch_size=7, num_bins=8, sigma=1):
+    if patch_size % 2 == 0:
+        patch_size += 1  # Ensure odd patch size
     
-    dominant_bin = np.argmax(smoothed_votes)
-    dominant_orientation = dominant_bin * 360 / num_bins
+    if len(image.shape) > 2:
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = image.copy()
     
-    # Build the rotation-normalized descriptor
-    for i in range(-max_radius, max_radius + 1):
-        for j in range(-max_radius, max_radius + 1):
-            yi, xi = y + i, x + j
-            
-            # Check if the pixel is within image boundaries
-            if 0 <= yi < height and 0 <= xi < width:
-                pixel_radius = np.sqrt(i**2 + j**2)
+    gray = gray.astype(np.float32)
+    
+    # Compute gradients
+    dx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+    dy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+    
+    magnitude = np.sqrt(dx**2 + dy**2)
+    orientation = np.arctan2(dy, dx) * 180 / np.pi  # Convert to degrees
+    orientation = np.mod(orientation, 360)  # Ensure values in [0, 360)
+    
+    keypoint_coords = np.argwhere(keypoints)
+    half_patch = patch_size // 2
+    descriptors = []
+    valid_keypoints = []
+    
+    # Gaussian weighting
+    y, x = np.mgrid[-half_patch:half_patch+1, -half_patch:half_patch+1]
+    gaussian_weights = np.exp(-(x**2 + y**2) / (2 * sigma**2))
+    
+    for y, x in keypoint_coords:
+        if (y < half_patch or y >= gray.shape[0] - half_patch or 
+            x < half_patch or x >= gray.shape[1] - half_patch):
+            continue
+        
+        y_start, y_end = y - half_patch, y + half_patch + 1
+        x_start, x_end = x - half_patch, x + half_patch + 1
+        
+        patch_magnitude = magnitude[y_start:y_end, x_start:x_end]
+        patch_orientation = orientation[y_start:y_end, x_start:x_end]
+        
+        weighted_magnitude = patch_magnitude * gaussian_weights
+        
+        # Compute the histogram of oriented gradients
+        num_bins = 8
+        bin_width = 360 / num_bins
+        #hist_range = (0, 360)
+        hist = np.zeros(num_bins)
+        
+        for i in range(patch_size):
+            for j in range(patch_size):
+                ori = patch_orientation[i, j]
+                mag = weighted_magnitude[i, j]
                 
-                if pixel_radius <= max_radius:
-                    # Calculate the radius bin
-                    r_bin = min(int(pixel_radius / radius_bin_size), radius_bins - 1)
-                    
-                    # Calculate the orientation relative to dominant orientation
-                    ori = orientation[yi, xi]
-                    if ori < 0:
-                        ori += 360
-                    
-                    # Normalize the orientation with respect to the dominant orientation
-                    normalized_ori = (ori - dominant_orientation) % 360
-                    ori_bin = int(normalized_ori * num_bins / 360) % num_bins
-                    
-                    # Add weighted contribution to the histogram
-                    histogram[r_bin, ori_bin] += magnitude[yi, xi]
+                bin_idx = int(ori / bin_width) % num_bins
+                hist[bin_idx] += mag
+        
+        # Get the dominant orientation
+        dominant_orientation = np.argmax(hist) * bin_width
+        
+        # Normalize patch orientation relative to dominant orientation
+        patch_orientation = np.mod(patch_orientation - dominant_orientation, 360)
+        
+        # Compute histogram again with adjusted orientations
+        hist = np.zeros(num_bins)
+        for i in range(patch_size):
+            for j in range(patch_size):
+                ori = patch_orientation[i, j]
+                mag = weighted_magnitude[i, j]
+                
+                bin_idx = int(ori / bin_width) % num_bins
+                hist[bin_idx] += mag
+        
+        # Normalize the histogram
+        norm = np.linalg.norm(hist)
+        if norm > 0:
+            hist = hist / norm
+        
+        descriptors.append(hist)
+        valid_keypoints.append([y, x])
     
-    # Normalize the histogram
-    descriptor = histogram.flatten()
-    norm = np.linalg.norm(descriptor)
-    if norm > 0:
-        descriptor = descriptor / norm
-    
-    return descriptor, dominant_orientation
+    return np.array(descriptors), np.array(valid_keypoints)
 
-def describe_harris_keypoints(image, keypoints):
+
+def match_descriptors(descriptors1, keypoints1, descriptors2, keypoints2, threshold=0.3):
     """
-    Compute rotation-invariant descriptors for all Harris keypoints.
+    Match descriptors between two sets of keypoints.
     
-    Args:
-        image: Grayscale input image
-        keypoints: List of keypoint coordinates (y, x)
+    Parameters:
+    -----------
+    descriptors1, descriptors2 : ndarray
+        Descriptors from two images
+    keypoints1, keypoints2 : ndarray
+        Coordinates of keypoints from two images
+    threshold : float
+        Ratio test threshold for matching
         
     Returns:
-        List of (keypoint, descriptor, orientation) tuples
-    """
-    results = []
-    for kp in keypoints:
-        descriptor, orientation = compute_rotation_invariant_descriptor(image, kp)
-        results.append((kp, descriptor, orientation))
-    
-    return results
-
-def match_keypoints(descriptors1, descriptors2, threshold=0.7):
-    """
-    Match keypoints based on descriptor similarity.
-    Uses ratio test for better matching.
-    
-    Args:
-        descriptors1: List of (keypoint, descriptor, orientation) from first image
-        descriptors2: List of (keypoint, descriptor, orientation) from second image
-        threshold: Ratio threshold for Lowe's ratio test
-        
-    Returns:
-        List of matches (idx1, idx2, distance)
+    --------
+    matches : list
+        List of indices of matched keypoints [(idx1, idx2), ...]
     """
     matches = []
     
-    for i, (kp1, desc1, _) in enumerate(descriptors1):
-        # Find the two best matches
-        distances = []
-        for j, (kp2, desc2, _) in enumerate(descriptors2):
-            dist = np.linalg.norm(desc1 - desc2)
-            distances.append((j, dist))
+    # For each descriptor in the first image
+    for i, desc1 in enumerate(descriptors1):
+        # Compute distances to all descriptors in the second image
+        distances = np.sqrt(np.sum((descriptors2 - desc1)**2, axis=1))
         
-        # Sort by distance
-        distances.sort(key=lambda x: x[1])
+        # Sort distances
+        sorted_indices = np.argsort(distances)
         
-        # Apply ratio test
-        if len(distances) >= 2:
-            best_idx, best_dist = distances[0]
-            second_best_dist = distances[1][1]
-            
-            if best_dist < threshold * second_best_dist:
-                matches.append((i, best_idx, best_dist))
+        # Apply ratio test (if first match is significantly better than second)
+        if len(sorted_indices) >= 2:
+            if distances[sorted_indices[0]] < threshold * distances[sorted_indices[1]]:
+                matches.append((i, sorted_indices[0]))
     
     return matches
-'''
-# Example usage:
-def demo_rotation_invariant_harris():
-    # Load an image
-    img = cv2.imread('white_rec.jpg', cv2.IMREAD_GRAYSCALE)
-    
-    # Create a rotated version
-    center = (img.shape[1] // 2, img.shape[0] // 2)
-    rotation_matrix = cv2.getRotationMatrix2D(center, 45, 1.0)
-    rotated_img = cv2.warpAffine(img, rotation_matrix, (img.shape[1], img.shape[0]))
-    
-    # Detect keypoints in both images
-    keypoints_orig = compute_harris_keypoints(img)
-    keypoints_rotated = compute_harris_keypoints(rotated_img)
-    
-    # Compute descriptors
-    descriptors_orig = describe_harris_keypoints(img, keypoints_orig)
-    descriptors_rotated = describe_harris_keypoints(rotated_img, keypoints_rotated)
-    
-    # Match keypoints
-    matches = match_keypoints(descriptors_orig, descriptors_rotated)
-    
-    # Sort matches by distance (better matches first)
-    matches.sort(key=lambda x: x[2])
-    
-    # Display results
-    print(f"Found {len(matches)} matches between original and rotated image")
-    
-    # Draw matches (simplified version)
-    result_img = np.hstack((img, rotated_img))
-    result_img = cv2.cvtColor(result_img, cv2.COLOR_GRAY2BGR)
-    
-    width = img.shape[1]
-    for i, j, _ in matches[:20]:  # Show top 20 matches
-        pt1 = (int(keypoints_orig[i][1]), int(keypoints_orig[i][0]))
-        pt2 = (int(keypoints_rotated[j][1]) + width, int(keypoints_rotated[j][0]))
-        cv2.line(result_img, pt1, pt2, (0, 255, 0), 1)
-        cv2.circle(result_img, pt1, 3, (0, 0, 255), -1)
-        cv2.circle(result_img, pt2, 3, (0, 0, 255), -1)
-    
-    cv2.imshow("Matches", result_img)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()''' 
-    
-def demo_rotation_invariant_harris(image_path='example.jpg', rotation_angle=45, max_matches=20):
+
+def visualize_matches(image1, keypoints1, image2, keypoints2, matches):
     """
-    Demonstrate the rotation-invariant Harris corner detector and descriptor.
+    Visualize descriptor matches between two images.
     
-    Args:
-        image_path: Path to the input image
-        rotation_angle: Angle to rotate the image (in degrees)
-        max_matches: Maximum number of matches to display
+    Parameters:
+    -----------
+    image1, image2 : ndarray
+        Two images with keypoints
+    keypoints1, keypoints2 : ndarray
+        Coordinates of keypoints
+    matches : list
+        List of index pairs for matches
+        
+    Returns:
+    --------
+    match_image : ndarray
+        Visualization of matches
     """
-    # Load an image
-    img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
-    if img is None:
-        # Create a sample image if none is provided
-        img = np.zeros((300, 300), dtype=np.uint8)
-        # Add some shapes for corners
-        cv2.rectangle(img, (50, 50), (100, 100), 255, -1)
-        cv2.rectangle(img, (150, 150), (200, 200), 255, -1)
-        cv2.circle(img, (200, 75), 25, 255, -1)
+    # Create a combined image
+    if len(image1.shape) == 2:
+        image1 = cv2.cvtColor(image1, cv2.COLOR_GRAY2BGR)
+    if len(image2.shape) == 2:
+        image2 = cv2.cvtColor(image2, cv2.COLOR_GRAY2BGR)
     
-    # Create a rotated version
-    center = (img.shape[1] // 2, img.shape[0] // 2)
-    rotation_matrix = cv2.getRotationMatrix2D(center, rotation_angle, 1.0)
-    rotated_img = cv2.warpAffine(img, rotation_matrix, (img.shape[1], img.shape[0]))
+    h1, w1 = image1.shape[:2]
+    h2, w2 = image2.shape[:2]
     
-    # Detect keypoints in both images
-    keypoints_orig = compute_harris_keypoints(img)
-    keypoints_rotated = compute_harris_keypoints(rotated_img)
+    combined_height = max(h1, h2)
+    combined_width = w1 + w2
+    match_image = np.zeros((combined_height, combined_width, 3), dtype=np.uint8)
     
-    print(f"Found {len(keypoints_orig)} keypoints in original image")
-    print(f"Found {len(keypoints_rotated)} keypoints in rotated image")
+    # Place the images side by side
+    match_image[:h1, :w1] = image1
+    match_image[:h2, w1:w1+w2] = image2
     
-    # Compute descriptors
-    descriptors_orig = describe_harris_keypoints(img, keypoints_orig)
-    descriptors_rotated = describe_harris_keypoints(rotated_img, keypoints_rotated)
+    # Draw matches
+    for idx1, idx2 in matches:
+        y1, x1 = keypoints1[idx1]
+        y2, x2 = keypoints2[idx2]
+        
+        # Draw points
+        cv2.circle(match_image, (x1, y1), 4, (0, 255, 0), -1)
+        cv2.circle(match_image, (x2 + w1, y2), 4, (0, 255, 0), -1)
+        
+        # Draw line
+        cv2.line(match_image, (x1, y1), (x2 + w1, y2), (0, 255, 255), 1)
     
-    # Match keypoints
-    matches = match_keypoints(descriptors_orig, descriptors_rotated)
+    return match_image
+
+# Example of using the descriptor
+def demo_harris_descriptor(image_path=None, transformed_image_path=None):
+    """
+    Demonstrate the Harris keypoint descriptor on an image and its transformed version.
     
-    # Sort matches by distance (better matches first)
-    matches.sort(key=lambda x: x[2])
+    Parameters:
+    -----------
+    image_path : str
+        Path to input image (if None, will create a test image)
+    transformed_image_path : str
+        Path to transformed version of the input image
+    """
+    # Create or load images
+    # Load the original image
+    image1 = cv2.imread(image_path)
+    image1 = cv2.cvtColor(image1, cv2.COLOR_BGR2RGB)
     
-    print(f"Found {len(matches)} matches between original and rotated image")
+    # If no transformed image is provided, create a simple transformation
+    image2 = cv2.imread(transformed_image_path)
+    image2 = cv2.cvtColor(image2, cv2.COLOR_BGR2RGB)
+   
+    # Convert images to grayscale
+    gray1 = cv2.cvtColor(image1, cv2.COLOR_RGB2GRAY)
+    gray2 = cv2.cvtColor(image2, cv2.COLOR_RGB2GRAY)
     
-    # Visualize original and rotated images with keypoints
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6))
+    # Detect Harris corners in both images
+    corners1, response1 = harris_corner_detector(gray1, k=0.04, threshold=0.3)
+    corners2, response2 = harris_corner_detector(gray2, k=0.04, threshold=0.3)
     
-    ax1.imshow(img, cmap='gray')
-    ax1.set_title('Original Image')
-    ax1.axis('off')
-    for y, x in keypoints_orig:
-        ax1.plot(x, y, 'ro', markersize=3)
+    # Apply non-maximum suppression
+    corners1_suppressed = non_max_suppression(corners1, response1, window_size=8)
+    corners2_suppressed = non_max_suppression(corners2, response2, window_size=8)
     
-    ax2.imshow(rotated_img, cmap='gray')
-    ax2.set_title(f'Rotated Image ({rotation_angle}°)')
-    ax2.axis('off')
-    for y, x in keypoints_rotated:
-        ax2.plot(x, y, 'ro', markersize=3)
+    # Compute descriptors for keypoints
+    descriptors1, keypoints1 = orientation_normalized_hkd(gray1, corners1_suppressed)
+    descriptors2, keypoints2 = orientation_normalized_hkd(gray2, corners2_suppressed)
     
-    plt.tight_layout()
-    plt.show()
+    # Match descriptors
+    matches = match_descriptors(descriptors1, keypoints1, descriptors2, keypoints2)
     
     # Visualize matches
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6))
+    match_image = visualize_matches(image1, keypoints1, image2, keypoints2, matches)
     
-    ax1.imshow(img, cmap='gray')
-    ax1.set_title('Original Image')
-    ax1.axis('off')
+    # Display the visualization
+    plt.figure(figsize=(15, 10))
     
-    ax2.imshow(rotated_img, cmap='gray')
-    ax2.set_title(f'Rotated Image ({rotation_angle}°)')
-    ax2.axis('off')
+    plt.subplot(221)
+    plt.imshow(image1)
+    plt.scatter(keypoints1[:, 1], keypoints1[:, 0], c='r', s=10)
+    plt.title(f'Image 1 with {len(keypoints1)} Keypoints')
+    plt.axis('off')
     
-    # Plot top matches
-    for idx, (i, j, dist) in enumerate(matches[:max_matches]):
-        y1, x1 = keypoints_orig[i]
-        y2, x2 = keypoints_rotated[j]
-        
-        ax1.plot(x1, y1, 'ro', markersize=5)
-        ax2.plot(x2, y2, 'ro', markersize=5)
-        
-        # Add a line connecting the matches
-        con = ConnectionPatch(xyA=(x1, y1), xyB=(x2, y2), 
-                             coordsA="data", coordsB="data",
-                             axesA=ax1, axesB=ax2, color='green', linewidth=1)
-        ax2.add_artist(con)
-        
-        # Add match number
-        ax1.annotate(f"{idx+1}", (x1, y1), xytext=(5, 5), 
-                    textcoords='offset points', color='white', fontsize=8)
-        ax2.annotate(f"{idx+1}", (x2, y2), xytext=(5, 5), 
-                    textcoords='offset points', color='white', fontsize=8)
+    plt.subplot(222)
+    plt.imshow(image2)
+    plt.scatter(keypoints2[:, 1], keypoints2[:, 0], c='r', s=10)
+    plt.title(f'Image 2 with {len(keypoints2)} Keypoints')
+    plt.axis('off')
     
-    plt.suptitle(f'Top {min(max_matches, len(matches))} Matches')
+    plt.subplot(212)
+    plt.imshow(match_image)
+    plt.title(f'Feature Matching ({len(matches)} matches)')
+    plt.axis('off')
+    
     plt.tight_layout()
     plt.show()
-    
-    # Plot the descriptor for one of the matched keypoints
-    if len(matches) > 0:
-        best_match_idx = matches[0][0]
-        best_kp, best_desc, _ = descriptors_orig[best_match_idx]
+
+    # For some descriptors, visualize their orientation histograms
+    if len(descriptors1) > 0:
+        plt.figure(figsize=(15, 5))
         
-        # Visualize the descriptor
-        descriptor_fig = visualize_descriptor(best_desc)
-        plt.suptitle(f'Descriptor for Keypoint {best_match_idx}')
+        # Display up to 5 descriptor histograms
+        num_to_display = min(5, len(descriptors1))
+        for i in range(num_to_display):
+            plt.subplot(1, num_to_display, i+1)
+            plt.bar(range(len(descriptors1[i])), descriptors1[i])
+            plt.title(f'Descriptor {i+1}')
+            plt.xticks(range(len(descriptors1[i])), 
+                       [f"{j*360/len(descriptors1[i]):.0f}°" for j in range(len(descriptors1[i]))], 
+                       rotation=45)
+        
+        plt.tight_layout()
         plt.show()
-        
-        # Show the keypoint neighborhood
-        y, x = best_kp
-        max_radius = 12  # Same as used in descriptor
-        patch_size = max_radius * 2 + 1
-        
-        # Extract the patch around the keypoint
-        y_min = max(0, y - max_radius)
-        y_max = min(img.shape[0], y + max_radius + 1)
-        x_min = max(0, x - max_radius)
-        x_max = min(img.shape[1], x + max_radius + 1)
-        
-        patch = np.zeros((patch_size, patch_size), dtype=np.uint8)
-        patch[y_min - (y - max_radius):y_max - (y - max_radius), 
-              x_min - (x - max_radius):x_max - (x - max_radius)] = img[y_min:y_max, x_min:x_max]
-        
-        # Show the patch
-        plt.figure(figsize=(6, 6))
-        plt.imshow(patch, cmap='gray')
-        plt.title(f'Neighborhood of Keypoint {best_match_idx}')
-        plt.axis('off')
-        plt.show()
-if __name__== "__main__":
-    demo_rotation_invariant_harris()
+
+
+
+# Run the demo
+if __name__ == "__main__":
+    demo_harris_descriptor(image_path="white_rec.jpg", transformed_image_path="new_white_rec.jpg")
