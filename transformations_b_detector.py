@@ -164,7 +164,7 @@ def visualize_corners(image, corners, color=(0, 255, 0), radius=5, thickness=1):
     return image_with_corners
 
 # Example usage
-def demo_harris_corner_detection(image_path='white_rec.jpg', k=0.04, threshold=0.01, nms_window_size=8):
+def demo_harris_corner_detection(image_path='white_rec.png', k=0.04, threshold=0.01, nms_window_size=8):
     """
     Demonstrate the Harris Corner Detection algorithm on an image.
     
@@ -224,5 +224,5 @@ def demo_harris_corner_detection(image_path='white_rec.jpg', k=0.04, threshold=0
 
 # Run the demo
 if __name__ == "__main__":
-    corners, response = demo_harris_corner_detection(image_path="new_white_rec.jpg", k=0.04, threshold=0.7)
+    corners, response = demo_harris_corner_detection(image_path="new_white_rec.png", k=0.04, threshold=0.6)
     
