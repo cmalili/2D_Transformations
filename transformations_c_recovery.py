@@ -105,6 +105,9 @@ def recover_rigid_transform_linear(keypoints1, keypoints2, matches):
     # For a pure rotation (with possible numerical error), we have:
     # a = cos(theta), b = -sin(theta), c = sin(theta), d = cos(theta)
     theta = np.arctan2(c, a) * 180 / np.pi  # angle in degrees
+    
+    tx, ty = np.linalg.inv(affine_matrix[:2,:2]) @ np.array([tx, ty]).T
+    
     return theta, tx, ty
 '''
     # Extract parameters
