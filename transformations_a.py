@@ -30,6 +30,7 @@ quad_points = np.array([
     [150, 170],# Bottom-right
     [130, 140]    # Bottom-left
 ], dtype=np.int32)
+
 # Draw the quadrilateral (filled with white)
 cv2.fillPoly(img, [quad_points], 255)
 cv2.imwrite("white_rec.png", img, [cv2.IMWRITE_PNG_COMPRESSION, 0])

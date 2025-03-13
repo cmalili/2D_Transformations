@@ -154,111 +154,8 @@ def harris_keypoint_descriptor(image, keypoints, patch_size=9, num_bins=9, sigma
     return np.array(descriptors), np.array(valid_keypoints)
 
 
-def harris_keypoint_descriptor1(image, keypoints, patch_size=1, num_bins=5, sigma=1):
-    """
-    Generate descriptors for Harris keypoints based on histogram of oriented gradients.
-    
-    Parameters:
-    -----------
-    image : ndarray
-        Input grayscale image
-    keypoints : ndarray
-        Binary mask where True values indicate keypoint locations
-    patch_size : int
-        Size of the patch around each keypoint (must be odd)
-    num_bins : int
-        Number of orientation bins for the histogram
-    sigma : float
-        Standard deviation for Gaussian weighting
-        
-    Returns:
-    --------
-    descriptors : ndarray
-        Array of descriptors for each keypoint
-    keypoint_coords : ndarray
-        Coordinates of keypoints that have valid descriptors
-    """
-    # Ensure patch_size is odd
-    if patch_size % 2 == 0:
-        patch_size += 1
-    
-    # Make sure image is grayscale
-    if len(image.shape) > 2:
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    else:
-        gray = image.copy()
-    
-    gray = gray.astype(np.float32)
-    '''
-    #gray = gray - cv2.GaussianBlur(gray, (5,5), 2)
-    
-    dx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
-    dy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
-    
-    magnitude = np.sqrt(dx**2 + dy**2)
-    orientation = np.arctan2(dy, dx) * 180 / np.pi  # Convert to degrees
-    
-    orientation = np.mod(orientation, 360)
-    '''
-    
-    magnitude, orientation = compute_orientation_dog(gray)
-    
-    keypoint_coords = np.argwhere(keypoints)
-    
-    half_patch = patch_size // 2
-    
-    descriptors = []
-    valid_keypoints = []
-    
-    y, x = np.mgrid[-half_patch:half_patch+1, -half_patch:half_patch+1]
-    gaussian_weights = np.exp(-(x**2 + y**2) / (2 * sigma**2))
-    
-    # Process each keypoint
-    for y, x in keypoint_coords:
-        # Skip keypoints too close to the image boundary
-        if (y < half_patch or y >= gray.shape[0] - half_patch or 
-            x < half_patch or x >= gray.shape[1] - half_patch):
-            continue
-        
-        # Extract patch around the keypoint
-        y_start, y_end = y - half_patch, y + half_patch + 1
-        x_start, x_end = x - half_patch, x + half_patch + 1
-        
-        patch_magnitude = magnitude[y_start:y_end, x_start:x_end]
-        patch_orientation = orientation[y_start:y_end, x_start:x_end]
-        
-        # Weight magnitudes by Gaussian
-        weighted_magnitude = patch_magnitude * gaussian_weights
-        
-        # Compute the histogram of oriented gradients
-        hist = np.zeros(num_bins)
-        
-        # Divide 360 degrees into num_bins
-        bin_width = 360 / num_bins
-        
-        # Fill the histogram
-        for i in range(patch_size):
-            for j in range(patch_size):
-                ori = patch_orientation[i, j]
-                mag = weighted_magnitude[i, j]
-                
-                # Calculate bin index and contribution
-                bin_idx = int(ori / bin_width) % num_bins
-                hist[bin_idx] += mag
-        
-        # Normalize the histogram
-        norm = np.linalg.norm(hist)
-        if norm > 0:
-            hist = hist / norm
-        
-        # Add to descriptors
-        descriptors.append(hist)
-        valid_keypoints.append([y, x])
-    
-    return np.array(descriptors), np.array(valid_keypoints)
 
-
-def orientation_normalized_hkd(image, keypoints, patch_size=7, num_bins=5, sigma=1):
+def orientation_normalized_hkd(image, keypoints, patch_size=8, num_bins=30, sigma=1):
     if patch_size % 2 == 0:
         patch_size += 1  # Ensure odd patch size
     
@@ -268,20 +165,7 @@ def orientation_normalized_hkd(image, keypoints, patch_size=7, num_bins=5, sigma
         gray = image.copy()
     
     gray = gray.astype(np.float32)
-    
-    '''
-    # Compute gradients
-    dx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
-    dy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
-    
-    magnitude = np.sqrt(dx**2 + dy**2)
-    orientation = np.arctan2(dy, dx) * 180 / np.pi  # Convert to degrees
-    orientation = np.mod(orientation, 360)  # Ensure values in [0, 360)
-    '''
-    
     magnitude, orientation = compute_orientation_dog(gray)
-    
-    
     
     keypoint_coords = np.argwhere(keypoints)
     half_patch = patch_size // 2
@@ -463,11 +347,11 @@ def demo_harris_descriptor(image_path=None, transformed_image_path=None):
     corners1_suppressed = non_max_suppression(corners1, response1, window_size=8)
     corners2_suppressed = non_max_suppression(corners2, response2, window_size=8)
     
-    '''
+    
     # Compute descriptors for keypoints
-    descriptors1, keypoints1 = orientation_normalized_hkd(gray1, corners1_suppressed)
-    descriptors2, keypoints2 = orientation_normalized_hkd(gray2, corners2_suppressed)
-    '''
+    #descriptors1, keypoints1 = orientation_normalized_hkd(gray1, corners1_suppressed)
+    #descriptors2, keypoints2 = orientation_normalized_hkd(gray2, corners2_suppressed)
+    
     
     descriptors1, keypoints1 = harris_keypoint_descriptor(gray1, corners1_suppressed)
     descriptors2, keypoints2 = harris_keypoint_descriptor(gray2, corners2_suppressed)
@@ -535,6 +419,9 @@ def demo_harris_descriptor(image_path=None, transformed_image_path=None):
         
         plt.tight_layout()
         plt.show()
+        
+    for i, match in enumerate(matches):
+        print(f"match: {match[0],match[1]}")
 
 
 

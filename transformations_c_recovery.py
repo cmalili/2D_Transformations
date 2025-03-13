@@ -9,7 +9,14 @@ Created on Sat Mar  1 18:23:50 2025
 import numpy as np
 import cv2
 import matplotlib.pyplot as plt
-from matplotlib.patches import ConnectionPatch
+#from matplotlib.patches import ConnectionPatch
+
+from transformations_b_detector import harris_corner_detector
+from transformations_b_detector import non_max_suppression
+
+from transformations_b_descriptor import harris_keypoint_descriptor
+from transformations_b_descriptor import match_descriptors
+from transformations_b_descriptor import visualize_matches
 
 def recover_rigid_transform_linear(keypoints1, keypoints2, matches):
     """
@@ -35,20 +42,23 @@ def recover_rigid_transform_linear(keypoints1, keypoints2, matches):
     # Extract matched points (converting from y,x to x,y format)
     points1 = []
     points2 = []
+    #matches = matches[:4]
     for idx1, idx2 in matches:
         # Convert from y,x to x,y format
         y1, x1 = keypoints1[idx1]
-        #y1, x1 = y1-150, x1-150
+        y1, x1 = y1 - 150, x1 - 150
         y2, x2 = keypoints2[idx2]
-        #y2, x2 = y2-150, x2-150
+        y2, x2 = y2 - 150, x2 - 150
         points1.append([x1, y1])
         points2.append([x2, y2])
     
     points1 = np.array(points1)
     points2 = np.array(points2)
+    print(f"points1: {points1}")
+    print(f"points2: {points2}")
     
     # Construct matrices for linear least squares
-    A = np.zeros((2 * len(matches), 3))
+    A = np.zeros((2 * len(matches), 6))
     b = np.zeros(2 * len(matches))
     
     for i in range(len(matches)):
@@ -56,6 +66,12 @@ def recover_rigid_transform_linear(keypoints1, keypoints2, matches):
         x2, y2 = points2[i]
         
         # Fill A matrix (for small angle approximation)
+        A[2 * i] = [x1, y1, 1, 0, 0, 0]
+        A[2 * i + 1] = [0, 0, 0, x1, y1, 1]
+        b[2 * i] = x2
+        b[2 * i + 1] = y2
+        
+        '''
         A[2*i, 0] = -y1    # -y1 coefficient for theta in x equation
         A[2*i, 1] = 1      # 1 coefficient for tx in x equation
         A[2*i, 2] = 0      # 0 coefficient for ty in x equation
@@ -67,17 +83,37 @@ def recover_rigid_transform_linear(keypoints1, keypoints2, matches):
         # Fill b vector
         b[2*i] = x2 - x1   # x2 - x1 for x equation
         b[2*i+1] = y2 - y1 # y2 - y1 for y equation
-    
+        '''
     # Solve linear system using least squares
-    params, residuals, rank, s = np.linalg.lstsq(A, b, rcond=None)
     
+    print(f"A: {A}")
+    print(f"b: {b}")
+    
+    params, _, _, _ = np.linalg.lstsq(A, b, rcond=None)
+    
+    params = params.flatten()
+    
+    # Build the affine transformation matrix
+    affine_matrix = np.array([[params[0], params[1], params[2]],
+                              [params[3], params[4], params[5]]])
+    
+    print(f"affine matrix:")
+    print(affine_matrix)
+    
+    a, b, tx = affine_matrix[0]
+    c, d, ty = affine_matrix[1]
+    # For a pure rotation (with possible numerical error), we have:
+    # a = cos(theta), b = -sin(theta), c = sin(theta), d = cos(theta)
+    theta = np.arctan2(c, a) * 180 / np.pi  # angle in degrees
+    return theta, tx, ty
+'''
     # Extract parameters
     theta = params[0]  # in radians for small angle approximation
     tx = params[1]
     ty = params[2]
     
     return theta, tx, ty
-
+'''
 
 # Demo function to show how to use the transformation recovery with the Harris feature detector
 def demo_transform_recovery(image_path, transformed_image_path, k=0.04, threshold=0.3, nms_window=8):
@@ -123,7 +159,7 @@ def demo_transform_recovery(image_path, transformed_image_path, k=0.04, threshol
     descriptors2, keypoints2 = harris_keypoint_descriptor(gray2, corners2_suppressed)
     
     # Match descriptors
-    matches = match_descriptors(descriptors1, keypoints1, descriptors2, keypoints2, threshold=0.9)
+    matches = match_descriptors(descriptors1, keypoints1, descriptors2, keypoints2, threshold=0.99)
     
     # Visualize matches
     match_image = visualize_matches(image1, keypoints1, image2, keypoints2, matches)
@@ -133,7 +169,7 @@ def demo_transform_recovery(image_path, transformed_image_path, k=0.04, threshol
     print("Using linear least squares:")
     if len(matches) >= 2:  # Need at least 2 correspondences
         theta_linear, tx_linear, ty_linear = recover_rigid_transform_linear(keypoints1, keypoints2, matches)
-        print(f"Estimated rotation: {np.degrees(theta_linear):.2f} degrees")
+        print(f"Estimated rotation: {theta_linear:.2f} degrees")
         print(f"Estimated translation: ({tx_linear:.2f}, {ty_linear:.2f})")
         
         # Evaluate transformation
@@ -151,4 +187,5 @@ def demo_transform_recovery(image_path, transformed_image_path, k=0.04, threshol
 
 # Run the demo
 if __name__ == "__main__":
-    demo_transform_recovery("white_rec.jpg", "new_white_rec.jpg")
+    #demo_transform_recovery("new_white_rec.jpg", "white_rec.jpg")
+    demo_transform_recovery("white_rec.png", "new_white_rec.png")
